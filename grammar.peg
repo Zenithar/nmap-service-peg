@@ -1,0 +1,282 @@
+{
+    // This file is generated automatically from grammar.peg.
+    // Do not modify.
+
+    package grammar;
+
+    import (
+        "strconv"
+    )
+
+    type Protocol string 
+
+    type Comment struct {
+        Text string `json:"text"`
+    }
+
+    type ExcludeDirective struct {
+        Ranges []*PortRange `json:"ranges"`
+    }
+
+    type PortRange struct {
+        Start int `json:"start"`
+        End   int `json:"end"`
+    }
+
+    func (pr *PortRange) IsIncluded(t Protocol, p int) bool {
+        return p >= pr.Start && p <= pr.End
+    }
+
+    type ProbeDirective struct {
+        Protocol     string `json:"protocol"`
+        ProbeName    string `json:"name"`
+        ProbeString  string `json:"payload"`
+        NoPayload    bool  `json:"noPayload"`
+    }
+
+    type MatchDirective struct {
+        Service Service `json:"service"`
+        Pattern MatchPattern `json:"pattern"`
+        Version []VersionInfo `json:"version_info,omitempty"`
+    }
+
+    type VersionInfo struct {
+        Type string `json:"type"`
+        Value string `json:"value"`
+    }
+
+    type SoftMatchDirective struct {
+        Service Service `json:"service"`
+        Pattern MatchPattern `json:"pattern"`
+        Version []VersionInfo `json:"version_info,omitempty"`
+    }
+
+    type MatchPattern struct {
+        Expression string `json:"expression"`
+        Options string `json:"options,omitempty"`
+    }
+
+    type Service struct {
+        Name string `json:"name"`
+        UseSSL bool `json:"use_ssl"`
+    }
+
+    type PortsDirective struct {
+        Ranges []*PortRange `json:"ranges"`
+        SSL bool `json:"ssl"`
+    }
+
+    type TotalWaitMsDirective struct {
+        Ms int `json:"ms"`
+    }
+
+    type TcpWrappedMsDirective struct {
+        Ms int `json:"ms"`
+    }
+
+    type RarityDirective struct {
+        Number int `json:"number"`
+    }
+
+    type FallbackDirective struct {
+        services []string `json:"services"`
+    }
+}
+
+Lines <- line:(Line)* EOF { return line, nil }
+
+Line <- stmt:(Comment / Directive) newline {
+    return stmt, nil
+}
+
+Comment <- "#" _ comment:([^\n])* {
+    return &Comment{string(c.text)}, nil
+}
+
+Directive <- ExcludeDirective
+            / ProbeDirective
+            / MatchDirective
+            / SoftMatchDirective
+            / PortsDirective
+            / SSLPortsDirective
+            / TotalWaitMsDirective
+            / TcpWrappedMsDirective
+            / RarityDirective
+            / FallbackDirective
+            / _
+
+ExcludeDirective <- "Exclude" _ prl:PortRangeList {
+    return &ExcludeDirective{prl.([]*PortRange)}, nil
+}
+
+PortRangeList <- start:PortRange others:("," PortRange)* {
+    if others == nil {
+        return []*PortRange{start.(*PortRange)}, nil
+    }
+
+    var portRanges []*PortRange
+    portRanges = append(portRanges, start.(*PortRange))
+    for _, o := range others.([]interface{}) {
+        otherRange := o.([]interface{})[1]
+        portRanges = append(portRanges, otherRange.(*PortRange))
+    }
+
+    return portRanges, nil
+}
+
+PortRange <- ([TU] ":")? start:number (end:("-" number)?) {
+    if end == nil {
+        return &PortRange{start.(int), start.(int)}, nil
+    } 
+    
+    endPort := end.([]interface{})[1]
+    return &PortRange{start.(int), endPort.(int)}, nil
+}
+
+ProbeDirective <- "Probe" _ protocol:Protocol _ name:Slug _ "q|" payload:ProbeString "|" _ noPayload:("no-payload")? {
+    return &ProbeDirective{protocol.(string), name.(string), payload.(string), noPayload != nil}, nil
+}
+
+Protocol <- ("TCP" / "UDP") { return string(c.text), nil }
+
+MatchDirective <- "match" _ name:Service _ match:MatchPattern _ vi:VersionInfo? {
+    if vi == nil {
+        return &MatchDirective{name.(Service), match.(MatchPattern), nil}, nil
+    }
+    return &MatchDirective{name.(Service), match.(MatchPattern), vi.([]VersionInfo)}, nil
+}
+
+VersionInfo <- first:VersionInfoItem others:(_ VersionInfoItem)* {
+    if others == nil {
+        return []VersionInfo{first.(VersionInfo)}, nil
+    }
+
+    var versionInfo []VersionInfo
+    versionInfo = append(versionInfo, first.(VersionInfo))
+    for _, o := range others.([]interface{}) {
+        otherVersionInfo := o.([]interface{})[1]
+        versionInfo = append(versionInfo, otherVersionInfo.(VersionInfo))
+    }
+
+    return versionInfo, nil
+}
+
+SoftMatchDirective <- "softmatch" _ name:Service _ match:MatchPattern _ vi:VersionInfo? {
+    if vi == nil {
+        return &SoftMatchDirective{name.(Service), match.(MatchPattern), nil}, nil
+    }
+    return &SoftMatchDirective{name.(Service), match.(MatchPattern), vi.([]VersionInfo)}, nil
+}
+
+PortsDirective <- "ports" _ prl:PortRangeList {
+    return &PortsDirective{prl.([]*PortRange), false}, nil
+}
+
+SSLPortsDirective <- "sslports" _ prl:PortRangeList {
+    return &PortsDirective{prl.([]*PortRange), true}, nil
+}
+
+TotalWaitMsDirective <- "totalwaitms" _ ms:number {
+    value := ms.(int)
+    if value < 0 {
+        return nil, fmt.Errorf("totalwaitms must be a positive integer")
+    }
+    return &TotalWaitMsDirective{value}, nil
+}
+
+TcpWrappedMsDirective <- "tcpwrappedms" _ ms:number {
+    value := ms.(int)
+    if value < 0 {
+        return nil, fmt.Errorf("tcpwrappedms must be a positive integer")
+    }
+    return &TcpWrappedMsDirective{value}, nil
+}
+
+RarityDirective <- "rarity" _ number:number {
+    value := number.(int)
+    
+    if value < 1 || value > 9 {
+        return nil, fmt.Errorf("rarity must be between 1 and 9")
+    }
+
+    return &RarityDirective{value}, nil
+}
+
+FallbackDirective <- "fallback" _ services:ServiceList {
+    return &FallbackDirective{services.([]string)}, nil
+}
+
+MatchOptions <- [is]+ { return string(c.text), nil }
+
+Service <- prefixed:("ssl/")? name:Slug { return Service{name.(string), prefixed != nil}, nil }
+
+ServiceList <- name:Slug others:("," Slug)* {
+    if others == nil {
+        return []string{name.(string)}, nil
+    }
+
+    var services []string
+    services = append(services, name.(string))
+    for _, o := range others.([]interface{}) {
+        otherService := o.([]interface{})[1]
+        services = append(services, otherService.(string))
+    }
+
+    return services, nil
+}
+
+
+ProbeString <- [^|]* { return string(c.text), nil }
+
+VersionInfoItem <- 
+    t:([pvihod]) "/" value:noSlash "/" { return VersionInfo{"", value.(string)}, nil }
+    / t:([pvihod]) "|" value:noPipe "|" { return VersionInfo{"", value.(string)}, nil }
+    / "cpe:/" value:noSlash "/" ("a")? { return VersionInfo{"cpe", value.(string)}, nil }
+    / "cpe:|" value:noPipe "|" ("a")? { return VersionInfo{"cpe", value.(string)}, nil }
+
+MatchPattern <- 
+    "m/" expr:noSlash "/" opts:matchOptions? { 
+        if opts == nil {
+            return MatchPattern{expr.(string), ""}, nil 
+        }
+        return MatchPattern{expr.(string), opts.(string)}, nil 
+    }
+    / "m|" expr:noPipe "|" opts:matchOptions? { 
+        if opts == nil {
+            return MatchPattern{expr.(string), ""}, nil 
+        }
+        return MatchPattern{expr.(string), opts.(string)}, nil 
+    }
+    / "m=" expr:noEquals "=" opts:matchOptions? { 
+        if opts == nil {
+            return MatchPattern{expr.(string), ""}, nil 
+        }
+        return MatchPattern{expr.(string), opts.(string)}, nil 
+    }
+    / "m%" expr:noPercent "%" opts:matchOptions? { 
+        if opts == nil {
+            return MatchPattern{expr.(string), ""}, nil 
+        }
+        return MatchPattern{expr.(string), opts.(string)}, nil 
+    }
+    / "m@" expr:noAt "@" opts:matchOptions? { 
+        if opts == nil {
+            return MatchPattern{expr.(string), ""}, nil 
+        }
+        return MatchPattern{expr.(string), opts.(string)}, nil 
+    }
+
+Slug <- [a-zA-Z0-9/_\\.\\-]+ { return string(c.text), nil }
+
+matchOptions <- [is]+ { return string(c.text), nil }
+
+noSlash <- [^/]* { return string(c.text), nil }
+noPipe <- [^|]* { return string(c.text), nil }
+noEquals <- [^=]* { return string(c.text), nil }
+noPercent <- [^%]* { return string(c.text), nil }
+noAt <- [^@]* { return string(c.text), nil }
+
+number <- [0-9]+ { return strconv.Atoi(string(c.text)) }
+_ <- [ \t]*
+newline <- [\n\r]
+EOF <- !.
